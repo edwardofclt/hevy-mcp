@@ -1,6 +1,12 @@
 export interface HevyConfig {
 	apiKey?: string;
+	http: boolean;
+	port: number;
+	clientId?: string;
+	clientSecret?: string;
 }
+
+const DEFAULT_HTTP_PORT = 3000;
 
 /**
  * Parse CLI arguments and environment to derive configuration.
@@ -34,9 +40,49 @@ export function parseConfig(
 		apiKey = env.HEVY_API_KEY || "";
 	}
 
+	let http = false;
+	let port = 0;
+	for (const raw of argv) {
+		if (raw === "--http") {
+			http = true;
+			continue;
+		}
+		const portMatch = raw.match(/^--port=(\d+)$/i);
+		if (portMatch) {
+			port = Number.parseInt(portMatch[1], 10);
+		}
+	}
+	if (env.MCP_HTTP === "1" || env.MCP_HTTP === "true") {
+		http = true;
+	}
+	if (!port && env.PORT) {
+		const envPort = Number.parseInt(env.PORT, 10);
+		if (Number.isFinite(envPort)) port = envPort;
+	}
+	if (port && !http) http = true;
+	if (http && !port) port = DEFAULT_HTTP_PORT;
+
+	const clientId = env.MCP_CLIENT_ID || undefined;
+	const clientSecret = env.MCP_CLIENT_SECRET || undefined;
+
 	return {
 		apiKey,
+		http,
+		port,
+		clientId,
+		clientSecret,
 	};
+}
+
+export function assertHttpCreds(
+	cfg: HevyConfig,
+): asserts cfg is HevyConfig & { clientId: string; clientSecret: string } {
+	if (!cfg.clientId || !cfg.clientSecret) {
+		console.error(
+			"HTTP mode requires MCP_CLIENT_ID and MCP_CLIENT_SECRET environment variables.",
+		);
+		process.exit(1);
+	}
 }
 
 export function assertApiKey(

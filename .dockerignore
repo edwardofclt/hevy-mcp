@@ -1,2 +1,34 @@
-# hevy-mcp no longer publishes Docker images.
-# This file remains only to document the deprecation and prevent accidental builds.
+# Dependencies
+node_modules
+
+# Build output (rebuilt in container)
+dist
+
+# Development files
+.env
+.env.*
+*.log
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Test files
+coverage
+*.test.ts
+tests/
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github
+lefthook.yml
+.releaserc.json

@@ -46,7 +46,7 @@ import { registerRoutineTools } from "./tools/routines.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerWebhookTools } from "./tools/webhooks.js";
 import { registerWorkoutTools } from "./tools/workouts.js";
-import { assertApiKey, parseConfig } from "./utils/config.js";
+import { assertApiKey, assertHttpCreds, parseConfig } from "./utils/config.js";
 import { createClient } from "./utils/hevyClient.js";
 
 const HEVY_API_BASEURL = "https://api.hevyapp.com";
@@ -61,7 +61,7 @@ const serverConfigSchema = z.object({
 export const configSchema = serverConfigSchema;
 type ServerConfig = z.infer<typeof serverConfigSchema>;
 
-function buildServer(apiKey: string) {
+export function buildServer(apiKey: string) {
 	const baseServer = new McpServer({
 		name,
 		version,
@@ -91,6 +91,16 @@ export async function runServer() {
 	const cfg = parseConfig(args, process.env);
 	const apiKey = cfg.apiKey;
 	assertApiKey(apiKey);
+
+	if (cfg.http) {
+		assertHttpCreds(cfg);
+		const { runHttpServer } = await import("./http.js");
+		await runHttpServer(apiKey, cfg.port, {
+			clientId: cfg.clientId,
+			clientSecret: cfg.clientSecret,
+		});
+		return;
+	}
 
 	const server = buildServer(apiKey);
 	console.error("Starting MCP server in stdio mode");

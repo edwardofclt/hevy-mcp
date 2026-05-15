@@ -166,6 +166,54 @@ Smithery can bundle and host `hevy-mcp` without Docker by importing the exported
 
 > **Why are `chalk`, `cors`, and `@smithery/sdk` dependencies?** Smithery’s TypeScript runtime injects its own Express bootstrap that imports these packages. Declaring them in `package.json` ensures the Smithery CLI can bundle your server successfully.
 
+### Self-hosted remote MCP (HTTP + shared credentials)
+
+You can deploy `hevy-mcp` as a remote MCP server gated by a single shared
+`client_id` / `client_secret` pair. All authenticated callers share one
+upstream Hevy account via the server's `HEVY_API_KEY`.
+
+Required runtime environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `HEVY_API_KEY` | Hevy API key used for all upstream calls |
+| `MCP_CLIENT_ID` | Shared client ID required from MCP clients |
+| `MCP_CLIENT_SECRET` | Shared client secret required from MCP clients |
+| `PORT` | HTTP port (default `3000`; setting `PORT` also enables HTTP mode) |
+
+Generate a strong secret:
+
+```bash
+openssl rand -base64 32
+```
+
+Run with Docker:
+
+```bash
+docker build -t hevy-mcp .
+docker run --rm -p 3000:3000 \
+  -e HEVY_API_KEY=... \
+  -e MCP_CLIENT_ID=demo \
+  -e MCP_CLIENT_SECRET=$(openssl rand -base64 32) \
+  hevy-mcp
+```
+
+Clients authenticate with HTTP Basic auth:
+
+```
+Authorization: Basic base64(MCP_CLIENT_ID:MCP_CLIENT_SECRET)
+```
+
+Endpoints:
+
+- `POST /mcp`, `GET /mcp`, `DELETE /mcp` — MCP Streamable HTTP transport (auth required)
+- `GET /health` — open health check for platform probes
+
+**Production deployments must terminate TLS in front of the server.** Basic
+auth over plaintext leaks the secret on every request. Every managed
+container host (Fly, Render, Railway, Cloud Run, Fargate behind an ALB, etc.)
+provides HTTPS termination by default.
+
 ### Stdio Only (Current)
 
 **As of version 1.18.0, hevy-mcp only supports stdio transport.** HTTP/SSE

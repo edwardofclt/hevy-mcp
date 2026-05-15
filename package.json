@@ -77,6 +77,8 @@
 		"@semantic-release/release-notes-generator": "^14.1.0",
 		"@sentry/rollup-plugin": "^4.6.1",
 		"@smithery/cli": "^3.1.2",
+		"@types/cors": "^2.8.19",
+		"@types/express": "^5.0.6",
 		"@types/node": "^25.0.2",
 		"@vitest/coverage-v8": "^4.0.14",
 		"abstract-syntax-tree": "^2.22.0",
