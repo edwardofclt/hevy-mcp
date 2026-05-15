@@ -2,9 +2,15 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import cors from "cors";
-import express, { type Request, type Response } from "express";
+import express, {
+	type NextFunction,
+	type Request,
+	type RequestHandler,
+	type Response,
+} from "express";
 import { buildServer } from "./index.js";
 import { requireBasicAuth } from "./utils/auth.js";
+import { createOAuthShim } from "./utils/oauth.js";
 
 const SESSION_HEADER = "mcp-session-id";
 
@@ -27,6 +33,8 @@ export async function runHttpServer(
 		}),
 	);
 	app.use(express.json({ limit: "4mb" }));
+	app.use(express.urlencoded({ extended: false, limit: "64kb" }));
+	app.set("trust proxy", true);
 
 	const transports = new Map<string, StreamableHTTPServerTransport>();
 
@@ -34,9 +42,24 @@ export async function runHttpServer(
 		res.json({ status: "ok" });
 	});
 
-	const basicAuth = requireBasicAuth(auth.clientId, auth.clientSecret);
+	const oauth = createOAuthShim({ clientSecret: auth.clientSecret });
+	oauth.mount(app);
 
-	app.post("/mcp", basicAuth, async (req: Request, res: Response) => {
+	const basicAuth = requireBasicAuth(auth.clientId, auth.clientSecret);
+	const mcpAuth: RequestHandler = (
+		req: Request,
+		res: Response,
+		next: NextFunction,
+	) => {
+		const header = req.header("authorization") ?? "";
+		if (header.toLowerCase().startsWith("bearer ")) {
+			oauth.requireBearer(req, res, next);
+			return;
+		}
+		basicAuth(req, res, next);
+	};
+
+	app.post("/mcp", mcpAuth, async (req: Request, res: Response) => {
 		const sessionId = req.header(SESSION_HEADER);
 		let transport = sessionId ? transports.get(sessionId) : undefined;
 
@@ -81,8 +104,8 @@ export async function runHttpServer(
 		await transport.handleRequest(req, res);
 	};
 
-	app.get("/mcp", basicAuth, handleSessionRequest);
-	app.delete("/mcp", basicAuth, handleSessionRequest);
+	app.get("/mcp", mcpAuth, handleSessionRequest);
+	app.delete("/mcp", mcpAuth, handleSessionRequest);
 
 	await new Promise<void>((resolve) => {
 		app.listen(port, () => {
