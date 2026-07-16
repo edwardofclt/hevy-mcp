@@ -166,53 +166,117 @@ Smithery can bundle and host `hevy-mcp` without Docker by importing the exported
 
 > **Why are `chalk`, `cors`, and `@smithery/sdk` dependencies?** Smithery’s TypeScript runtime injects its own Express bootstrap that imports these packages. Declaring them in `package.json` ensures the Smithery CLI can bundle your server successfully.
 
-### Self-hosted remote MCP (HTTP + shared credentials)
+### Self-hosted remote MCP (Sign in with Apple + per-user Hevy keys)
 
-You can deploy `hevy-mcp` as a remote MCP server gated by a single shared
-`client_id` / `client_secret` pair. All authenticated callers share one
-upstream Hevy account via the server's `HEVY_API_KEY`.
+Deploy `hevy-mcp` as a genuine multi-tenant remote MCP server on Fly.io. Each
+user authenticates with Sign in with Apple, manages their own Hevy API key
+from a web dashboard (`/account`), and MCP clients (e.g., Claude) connect on
+that user's behalf via OAuth after the user authorizes the client. The old
+shared `MCP_CLIENT_ID`/`MCP_CLIENT_SECRET` Basic-auth model is completely
+replaced — no more shared secrets.
 
-Required runtime environment variables:
+#### Required runtime environment variables
 
 | Variable | Purpose |
 |---|---|
-| `HEVY_API_KEY` | Hevy API key used for all upstream calls |
-| `MCP_CLIENT_ID` | Shared client ID required from MCP clients |
-| `MCP_CLIENT_SECRET` | Shared client secret required from MCP clients |
-| `PORT` | HTTP port (default `3000`; setting `PORT` also enables HTTP mode) |
+| `ENCRYPTION_KEY` | Base64-encoded 32-byte AES-256-GCM master key. Generate via `openssl rand -base64 32`. Encrypts stored Hevy API keys at rest. |
+| `APPLE_TEAM_ID` | Your Apple Developer Team ID. |
+| `APPLE_CLIENT_ID` | The Services ID registered in the Apple Developer portal for Sign in with Apple. |
+| `APPLE_KEY_ID` | The Key ID of your Sign in with Apple private key (.p8 file). |
+| `APPLE_PRIVATE_KEY` | Contents of your `.p8` private key file from Apple (the full PEM-encoded key). |
+| `APPLE_REDIRECT_URI` | OAuth redirect URI (must match exactly what you registered in the Apple portal; e.g., `https://your-app-name.fly.dev/auth/apple/callback`). |
+| `DATABASE_PATH` | Path to the SQLite database file (default: `/data/hevy-mcp.sqlite` in Docker, `./hevy-mcp.sqlite` for local dev). |
+| `PORT` | HTTP port (default `3000`; setting `PORT` enables HTTP mode). |
 
-Generate a strong secret:
+**Note:** `HEVY_API_KEY` is **no longer required** for HTTP/remote MCP mode — each user supplies their own Hevy API key via the dashboard and it is encrypted at rest with `ENCRYPTION_KEY`. `HEVY_API_KEY` is only used by the separate local stdio/single-user mode (unaffected by this change, documented elsewhere in the README).
+
+#### Apple Developer prerequisites
+
+1. A **Services ID** configured for "Sign in with Apple" in the Apple Developer portal.
+2. A **verified redirect domain** (Apple requires a real domain, not a bare IP or `*.fly.dev`-style hostname unless it is your actual custom domain). The `APPLE_REDIRECT_URI` environment variable must match exactly.
+3. A **private key** (.p8 file) generated for Sign in with Apple. Note its Key ID (`APPLE_KEY_ID`).
+4. The **Team ID** from your Apple Developer account.
+
+#### Fly.io deployment
+
+1. **First-time setup: create the data volume**
+
+   ```bash
+   fly volumes create hevy_mcp_data --size 1
+   ```
+
+   This volume will store the SQLite database across app recreations. The size is intentionally small (1 GB) — adjust if you expect very large datasets.
+
+2. **Create the app and set secrets**
+
+   First, edit `fly.toml`: replace the placeholder `app` name with your desired app name (must be globally unique on Fly.io) and pick a `primary_region` closest to your users (see fly.toml comments).
+
+   Then:
+
+   ```bash
+   fly secrets set \
+     ENCRYPTION_KEY=$(openssl rand -base64 32) \
+     APPLE_TEAM_ID=<your-team-id> \
+     APPLE_CLIENT_ID=<your-services-id> \
+     APPLE_KEY_ID=<your-key-id> \
+     APPLE_PRIVATE_KEY="$(cat AuthKey_XXXXXXXXXX.p8)" \
+     APPLE_REDIRECT_URI=https://<your-app-name>.fly.dev/auth/apple/callback
+   ```
+
+3. **Deploy**
+
+   ```bash
+   fly deploy
+   ```
+
+   Fly.io terminates TLS at the edge automatically, so the app does not need to manage certificates.
+
+#### Docker Compose / local self-test
+
+To run locally with Docker Compose (useful for testing before Fly.io deployment):
 
 ```bash
-openssl rand -base64 32
+# Copy .env.sample and fill in all required vars (ENCRYPTION_KEY, APPLE_* vars, APPLE_REDIRECT_URI)
+cp .env.sample .env.local
+# Edit .env.local with your Apple credentials
+docker compose --env-file .env.local up
 ```
 
-Run with Docker:
+The `docker-compose.yml` mounts a named volume at `/data` for the SQLite database and requires all Apple authentication variables to be set.
 
-```bash
-docker build -t hevy-mcp .
-docker run --rm -p 3000:3000 \
-  -e HEVY_API_KEY=... \
-  -e MCP_CLIENT_ID=demo \
-  -e MCP_CLIENT_SECRET=$(openssl rand -base64 32) \
-  hevy-mcp
-```
+#### Using the dashboard
 
-Clients authenticate with HTTP Basic auth:
+After deployment (or Docker Compose startup), visit `https://your-app-name.fly.dev/login` (or `http://localhost:3000/login` for local testing):
 
-```
-Authorization: Basic base64(MCP_CLIENT_ID:MCP_CLIENT_SECRET)
-```
+1. **Sign in with Apple** — you are redirected through Apple's OAuth flow.
+2. **Dashboard at `/account`** — after sign-in, you can view whether a Hevy API key is configured (including the date it was last updated) and save/replace it via an HTML form.
+3. **Write-only guarantee** — your Hevy API key is never displayed or returned in any API response. Once saved, only the dashboard shows that a key exists; the key itself is encrypted at rest and only decrypted server-side per API call.
+4. **Sign out** — click the sign-out link on `/account` to clear your session.
 
-Endpoints:
+#### Connecting an MCP client (Claude, Cursor, etc.)
 
-- `POST /mcp`, `GET /mcp`, `DELETE /mcp` — MCP Streamable HTTP transport (auth required)
-- `GET /health` — open health check for platform probes
+Point your MCP client to `https://your-app-name.fly.dev/mcp` (or `http://localhost:3000/mcp` for local testing). The first time a client connects:
 
-**Production deployments must terminate TLS in front of the server.** Basic
-auth over plaintext leaks the secret on every request. Every managed
-container host (Fly, Render, Railway, Cloud Run, Fargate behind an ALB, etc.)
-provides HTTPS termination by default.
+1. The client will be redirected to `/authorize`.
+2. You sign in with Apple (if not already signed in on the dashboard).
+3. A consent screen asks you to authorize the client to access your Hevy data.
+4. The client receives an OAuth token and can make MCP calls on your behalf.
+
+This replaces the old shared-secret model — no more HTTP Basic auth or shared credentials.
+
+#### Endpoints
+
+- `GET /login` — Redirect to Apple Sign in with Apple, with optional `next` parameter to return to after sign-in.
+- `POST /auth/apple/callback` — Apple posts the `id_token` here (internal redirect target; you don't call this directly).
+- `GET /account` — Dashboard for viewing key status and saving a new Hevy API key (requires web session).
+- `POST /account/hevy-key` — Save or replace your Hevy API key (requires web session).
+- `POST /account/logout` — Sign out and clear your session.
+- `GET /authorize` — OAuth authorization endpoint for MCP clients (redirects to `/login` if you're not signed in).
+- `POST /token` — OAuth token endpoint (PKCE exchange, returns a bearer token for the MCP client).
+- `POST /mcp`, `GET /mcp`, `DELETE /mcp` — MCP Streamable HTTP transport (requires a valid bearer token in `Authorization: Bearer <token>`).
+- `GET /health` — Open health check for platform probes.
+
+**Production deployments must terminate TLS in front of the server.** Fly.io handles TLS termination automatically at the edge. For other hosting platforms (Render, Railway, Cloud Run, etc.), ensure HTTPS is configured in front of the app to protect the bearer tokens and session cookies in transit.
 
 ### Stdio Only (Current)
 

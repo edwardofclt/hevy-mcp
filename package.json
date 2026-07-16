@@ -60,8 +60,10 @@
 		"@smithery/sdk": "4.0.1",
 		"axios": "^1.13.2",
 		"chalk": "^5.6.2",
+		"cookie-parser": "^1.4.7",
 		"cors": "^2.8.5",
 		"express": "5.2.1",
+		"jose": "^6.2.3",
 		"zod": "^4.1.13"
 	},
 	"devDependencies": {
@@ -77,6 +79,7 @@
 		"@semantic-release/release-notes-generator": "^14.1.0",
 		"@sentry/rollup-plugin": "^4.6.1",
 		"@smithery/cli": "^3.1.2",
+		"@types/cookie-parser": "^1.4.10",
 		"@types/cors": "^2.8.19",
 		"@types/express": "^5.0.6",
 		"@types/node": "^25.0.2",

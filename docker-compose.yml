@@ -6,9 +6,15 @@ services:
     ports:
       - "${HEVY_MCP_PORT:-3000}:3000"
     environment:
-      HEVY_API_KEY: ${HEVY_API_KEY:?HEVY_API_KEY is required}
-      MCP_CLIENT_ID: ${MCP_CLIENT_ID:?MCP_CLIENT_ID is required}
-      MCP_CLIENT_SECRET: ${MCP_CLIENT_SECRET:?MCP_CLIENT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}
+      APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:?APPLE_CLIENT_ID is required}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:?APPLE_KEY_ID is required}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:?APPLE_PRIVATE_KEY is required}
+      APPLE_REDIRECT_URI: ${APPLE_REDIRECT_URI:?APPLE_REDIRECT_URI is required}
+      DATABASE_PATH: /data/hevy-mcp.sqlite
+    volumes:
+      - hevy_mcp_data:/data
     healthcheck:
       test:
         - CMD
@@ -19,3 +25,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  hevy_mcp_data:

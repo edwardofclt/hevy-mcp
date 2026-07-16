@@ -2,8 +2,13 @@ export interface HevyConfig {
 	apiKey?: string;
 	http: boolean;
 	port: number;
-	clientId?: string;
-	clientSecret?: string;
+	databasePath?: string;
+	encryptionKey?: string;
+	appleTeamId?: string;
+	appleClientId?: string;
+	appleKeyId?: string;
+	applePrivateKey?: string;
+	appleRedirectUri?: string;
 }
 
 const DEFAULT_HTTP_PORT = 3000;
@@ -62,26 +67,51 @@ export function parseConfig(
 	if (port && !http) http = true;
 	if (http && !port) port = DEFAULT_HTTP_PORT;
 
-	const clientId = env.MCP_CLIENT_ID || undefined;
-	const clientSecret = env.MCP_CLIENT_SECRET || undefined;
+	const databasePath = env.DATABASE_PATH || "./hevy-mcp.sqlite";
+	const encryptionKey = env.ENCRYPTION_KEY || undefined;
+	const appleTeamId = env.APPLE_TEAM_ID || undefined;
+	const appleClientId = env.APPLE_CLIENT_ID || undefined;
+	const appleKeyId = env.APPLE_KEY_ID || undefined;
+	const applePrivateKey = env.APPLE_PRIVATE_KEY || undefined;
+	const appleRedirectUri = env.APPLE_REDIRECT_URI || undefined;
 
 	return {
 		apiKey,
 		http,
 		port,
-		clientId,
-		clientSecret,
+		databasePath,
+		encryptionKey,
+		appleTeamId,
+		appleClientId,
+		appleKeyId,
+		applePrivateKey,
+		appleRedirectUri,
 	};
 }
 
-export function assertHttpCreds(
-	cfg: HevyConfig,
-): asserts cfg is HevyConfig & { clientId: string; clientSecret: string } {
-	if (!cfg.clientId || !cfg.clientSecret) {
-		console.error(
-			"HTTP mode requires MCP_CLIENT_ID and MCP_CLIENT_SECRET environment variables.",
-		);
-		process.exit(1);
+export function assertHttpEnv(cfg: HevyConfig): asserts cfg is HevyConfig & {
+	encryptionKey: string;
+	appleTeamId: string;
+	appleClientId: string;
+	appleKeyId: string;
+	applePrivateKey: string;
+	appleRedirectUri: string;
+} {
+	if (cfg.http) {
+		const missing: string[] = [];
+		if (!cfg.encryptionKey) missing.push("ENCRYPTION_KEY");
+		if (!cfg.appleTeamId) missing.push("APPLE_TEAM_ID");
+		if (!cfg.appleClientId) missing.push("APPLE_CLIENT_ID");
+		if (!cfg.appleKeyId) missing.push("APPLE_KEY_ID");
+		if (!cfg.applePrivateKey) missing.push("APPLE_PRIVATE_KEY");
+		if (!cfg.appleRedirectUri) missing.push("APPLE_REDIRECT_URI");
+
+		if (missing.length > 0) {
+			console.error(
+				`HTTP mode requires the following environment variables: ${missing.join(", ")}`,
+			);
+			process.exit(1);
+		}
 	}
 }
 

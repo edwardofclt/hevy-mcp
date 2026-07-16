@@ -46,7 +46,7 @@ import { registerRoutineTools } from "./tools/routines.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerWebhookTools } from "./tools/webhooks.js";
 import { registerWorkoutTools } from "./tools/workouts.js";
-import { assertApiKey, assertHttpCreds, parseConfig } from "./utils/config.js";
+import { assertApiKey, assertHttpEnv, parseConfig } from "./utils/config.js";
 import { createClient } from "./utils/hevyClient.js";
 
 const HEVY_API_BASEURL = "https://api.hevyapp.com";
@@ -89,19 +89,26 @@ export default function createServer({ config }: { config: ServerConfig }) {
 export async function runServer() {
 	const args = process.argv.slice(2);
 	const cfg = parseConfig(args, process.env);
-	const apiKey = cfg.apiKey;
-	assertApiKey(apiKey);
 
 	if (cfg.http) {
-		assertHttpCreds(cfg);
+		assertHttpEnv(cfg);
 		const { runHttpServer } = await import("./http.js");
-		await runHttpServer(apiKey, cfg.port, {
-			clientId: cfg.clientId,
-			clientSecret: cfg.clientSecret,
+		await runHttpServer(cfg.port, {
+			databasePath: cfg.databasePath ?? "./hevy-mcp.sqlite",
+			encryptionKey: cfg.encryptionKey,
+			apple: {
+				teamId: cfg.appleTeamId,
+				clientId: cfg.appleClientId,
+				keyId: cfg.appleKeyId,
+				privateKey: cfg.applePrivateKey,
+				redirectUri: cfg.appleRedirectUri,
+			},
 		});
 		return;
 	}
 
+	const apiKey = cfg.apiKey;
+	assertApiKey(apiKey);
 	const server = buildServer(apiKey);
 	console.error("Starting MCP server in stdio mode");
 	const transport = new StdioServerTransport();

@@ -34,15 +34,29 @@ COPY --from=builder /app/package.json ./
 # Set environment
 ENV NODE_ENV=production \
     MCP_HTTP=true \
-    PORT=3000
+    PORT=3000 \
+    DATABASE_PATH=/data/hevy-mcp.sqlite
+
+# Persist the SQLite database across container recreations
+VOLUME /data
 
 EXPOSE 3000
 
-# Required at runtime when deploying as a remote MCP server:
-#   HEVY_API_KEY       - Hevy API key used for all upstream calls
-#   MCP_CLIENT_ID      - shared client ID required from MCP clients
-#   MCP_CLIENT_SECRET  - shared client secret required from MCP clients
-# Clients authenticate with HTTP Basic auth: Authorization: Basic base64(id:secret).
+# Required at runtime when deploying as a remote MCP server (multi-tenant HTTP mode):
+#   ENCRYPTION_KEY      - base64-encoded 32-byte AES-256-GCM master key
+#                         Generate: openssl rand -base64 32
+#   APPLE_TEAM_ID       - Apple developer team ID
+#   APPLE_CLIENT_ID     - Apple Services ID (OAuth client_id for Sign in with Apple)
+#   APPLE_KEY_ID        - Apple Sign in key ID
+#   APPLE_PRIVATE_KEY   - Contents of the Apple Sign in .p8 private key file
+#   APPLE_REDIRECT_URI  - Apple OAuth redirect URI (e.g. https://<app>.fly.dev/auth/apple/callback)
+#   DATABASE_PATH       - Path to SQLite database file (defaults to /data/hevy-mcp.sqlite above)
+#
+# NOTE: HEVY_API_KEY is NOT required for HTTP mode anymore — each user brings their own
+# Hevy API key via the web dashboard (/account), encrypted at rest with ENCRYPTION_KEY.
+# HEVY_API_KEY is still required/used for the separate stdio/local single-user mode,
+# which is unaffected by this change.
+#
 # Production deployments MUST terminate TLS in front of this container.
 
 ENTRYPOINT ["node", "dist/cli.mjs"]

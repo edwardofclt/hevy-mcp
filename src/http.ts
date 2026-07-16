@@ -1,29 +1,46 @@
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, {
-	type NextFunction,
-	type Request,
-	type RequestHandler,
-	type Response,
-} from "express";
+import express, { type Request, type Response } from "express";
 import { buildServer } from "./index.js";
-import { requireBasicAuth } from "./utils/auth.js";
+import { createAuthRoutes } from "./routes/auth.js";
+import { loadMasterKey } from "./utils/crypto.js";
+import { openDb } from "./utils/db.js";
 import { createOAuthShim } from "./utils/oauth.js";
+import {
+	createRequireWebSession,
+	deriveCookieSecret,
+} from "./utils/session.js";
 
 const SESSION_HEADER = "mcp-session-id";
+const GC_INTERVAL_MS = 30 * 60 * 1000;
 
-export interface HttpAuth {
-	clientId: string;
-	clientSecret: string;
+export interface HttpConfig {
+	databasePath: string;
+	encryptionKey: string;
+	apple: {
+		teamId: string;
+		clientId: string;
+		keyId: string;
+		privateKey: string;
+		redirectUri: string;
+	};
 }
 
 export async function runHttpServer(
-	apiKey: string,
 	port: number,
-	auth: HttpAuth,
+	cfg: HttpConfig,
 ): Promise<void> {
+	const masterKey = loadMasterKey({
+		ENCRYPTION_KEY: cfg.encryptionKey,
+	} as NodeJS.ProcessEnv);
+	const db = openDb(cfg.databasePath);
+
+	const gcTimer = setInterval(() => db.gcExpired(), GC_INTERVAL_MS);
+	gcTimer.unref();
+
 	const app = express();
 	app.use(
 		cors({
@@ -34,6 +51,7 @@ export async function runHttpServer(
 	);
 	app.use(express.json({ limit: "4mb" }));
 	app.use(express.urlencoded({ extended: false, limit: "64kb" }));
+	app.use(cookieParser(deriveCookieSecret(masterKey)));
 	app.set("trust proxy", true);
 
 	const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -42,24 +60,39 @@ export async function runHttpServer(
 		res.json({ status: "ok" });
 	});
 
-	const oauth = createOAuthShim({ clientSecret: auth.clientSecret });
-	oauth.mount(app);
+	app.use(
+		createAuthRoutes({
+			db,
+			masterKey,
+			apple: {
+				teamId: cfg.apple.teamId,
+				clientId: cfg.apple.clientId,
+				keyId: cfg.apple.keyId,
+				privateKey: cfg.apple.privateKey,
+				redirectUri: cfg.apple.redirectUri,
+			},
+		}),
+	);
 
-	const basicAuth = requireBasicAuth(auth.clientId, auth.clientSecret);
-	const mcpAuth: RequestHandler = (
-		req: Request,
-		res: Response,
-		next: NextFunction,
-	) => {
-		const header = req.header("authorization") ?? "";
-		if (header.toLowerCase().startsWith("bearer ")) {
-			oauth.requireBearer(req, res, next);
+	const oauth = createOAuthShim({ db });
+	oauth.mount(app, createRequireWebSession(db));
+
+	app.post("/mcp", oauth.requireBearer, async (req: Request, res: Response) => {
+		const userId = res.locals.userId as string;
+		const apiKey = db.getDecryptedHevyKey(userId, masterKey);
+		if (!apiKey) {
+			res.status(403).json({
+				jsonrpc: "2.0",
+				error: {
+					code: -32003,
+					message:
+						"No Hevy API key configured. Visit /account to add one before connecting.",
+				},
+				id: null,
+			});
 			return;
 		}
-		basicAuth(req, res, next);
-	};
 
-	app.post("/mcp", mcpAuth, async (req: Request, res: Response) => {
 		const sessionId = req.header(SESSION_HEADER);
 		let transport = sessionId ? transports.get(sessionId) : undefined;
 
@@ -104,8 +137,8 @@ export async function runHttpServer(
 		await transport.handleRequest(req, res);
 	};
 
-	app.get("/mcp", mcpAuth, handleSessionRequest);
-	app.delete("/mcp", mcpAuth, handleSessionRequest);
+	app.get("/mcp", oauth.requireBearer, handleSessionRequest);
+	app.delete("/mcp", oauth.requireBearer, handleSessionRequest);
 
 	await new Promise<void>((resolve) => {
 		app.listen(port, () => {

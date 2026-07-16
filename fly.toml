@@ -1,0 +1,39 @@
+# fly.toml app configuration for hevy-mcp
+#
+# NOTE: rename the app below (must be globally unique on Fly.io) before deploying,
+# e.g. via `fly apps create <your-app-name>` and updating `app` here.
+#
+# One-time setup before first deploy:
+#   fly volumes create hevy_mcp_data --size 1 --region iad
+#   fly secrets set ENCRYPTION_KEY=$(openssl rand -base64 32) \
+#     APPLE_TEAM_ID=... APPLE_CLIENT_ID=... APPLE_KEY_ID=... \
+#     APPLE_PRIVATE_KEY="$(cat AuthKey_XXXXXXXXXX.p8)" \
+#     APPLE_REDIRECT_URI=https://<your-app-name>.fly.dev/auth/apple/callback
+
+app = "hevy-mcp"
+primary_region = "iad" # placeholder — pick the region closest to your users
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Volume for the SQLite database. Must be created once via:
+#   fly volumes create hevy_mcp_data --size 1
+[[mounts]]
+  source = "hevy_mcp_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # SQLite-on-volume is a single-writer setup — we deliberately don't
+  # auto-scale to N machines.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    path = "/health"
+    method = "GET"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"

@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import express from "express";
+import express, { type RequestHandler } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AuthCodeParams, AuthCodeRecord, Db } from "./db.js";
 import { createOAuthShim } from "./oauth.js";
 
-const SECRET = "supersecret";
+const TEST_USER = "user-1";
 
 function pkcePair(): { verifier: string; challenge: string } {
 	const verifier = randomBytes(32).toString("base64url");
@@ -18,6 +19,96 @@ function pkcePair(): { verifier: string; challenge: string } {
 	return { verifier, challenge };
 }
 
+function createFakeDb(): Db {
+	const authCodes = new Map<string, AuthCodeRecord & { expiresAt: number }>();
+	const tokens = new Map<string, { userId: string; expiresAt: number }>();
+
+	return {
+		upsertUser: () => {
+			throw new Error("not implemented");
+		},
+		getUserByAppleSub: () => {
+			throw new Error("not implemented");
+		},
+		saveHevyKey: () => {
+			throw new Error("not implemented");
+		},
+		getHevyKeyStatus: () => {
+			throw new Error("not implemented");
+		},
+		getDecryptedHevyKey: () => {
+			throw new Error("not implemented");
+		},
+		createWebSession: () => {
+			throw new Error("not implemented");
+		},
+		getWebSession: () => {
+			throw new Error("not implemented");
+		},
+		deleteWebSession: () => {
+			throw new Error("not implemented");
+		},
+		createAuthCode(params: AuthCodeParams): { code: string } {
+			const code = randomBytes(32).toString("base64url");
+			const now = params.now ?? Date.now();
+			authCodes.set(code, {
+				userId: params.userId,
+				redirectUri: params.redirectUri,
+				codeChallenge: params.codeChallenge,
+				codeChallengeMethod: params.codeChallengeMethod,
+				clientId: params.clientId,
+				expiresAt: now + params.ttlMs,
+			});
+			return { code };
+		},
+		consumeAuthCode(
+			code: string,
+			now: number = Date.now(),
+		): AuthCodeRecord | undefined {
+			const record = authCodes.get(code);
+			authCodes.delete(code);
+			if (!record || record.expiresAt <= now) return undefined;
+			const { expiresAt, ...rest } = record;
+			return rest;
+		},
+		createMcpToken(
+			userId: string,
+			ttlMs: number,
+			now: number = Date.now(),
+		): { token: string; expiresAt: number } {
+			const token = randomBytes(32).toString("base64url");
+			const expiresAt = now + ttlMs;
+			tokens.set(token, { userId, expiresAt });
+			return { token, expiresAt };
+		},
+		getMcpToken(
+			token: string,
+			now: number = Date.now(),
+		): { userId: string } | undefined {
+			const record = tokens.get(token);
+			if (!record || record.expiresAt <= now) return undefined;
+			return { userId: record.userId };
+		},
+		gcExpired(now: number = Date.now()): void {
+			for (const [k, v] of authCodes)
+				if (v.expiresAt <= now) authCodes.delete(k);
+			for (const [k, v] of tokens) if (v.expiresAt <= now) tokens.delete(k);
+		},
+		close: () => {},
+	};
+}
+
+const fakeRequireWebSession: RequestHandler = (req, res, next) => {
+	const userId = req.header("x-test-user-id");
+	if (!userId) {
+		const next_ = encodeURIComponent(req.originalUrl);
+		res.redirect(302, `/login?next=${next_}`);
+		return;
+	}
+	res.locals.userId = userId;
+	next();
+};
+
 async function startApp(): Promise<{
 	base: string;
 	close: () => Promise<void>;
@@ -25,10 +116,10 @@ async function startApp(): Promise<{
 	const app = express();
 	app.use(express.json());
 	app.use(express.urlencoded({ extended: false }));
-	const oauth = createOAuthShim({ clientSecret: SECRET });
-	oauth.mount(app);
+	const oauth = createOAuthShim({ db: createFakeDb() });
+	oauth.mount(app, fakeRequireWebSession);
 	app.get("/protected", oauth.requireBearer, (_req, res) => {
-		res.json({ ok: true });
+		res.json({ ok: true, userId: res.locals.userId });
 	});
 	const server: Server = await new Promise((resolve) => {
 		const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -84,30 +175,42 @@ describe("dynamic registration", () => {
 	});
 });
 
-describe("authorize form", () => {
-	it("renders form on GET", async () => {
+describe("authorize", () => {
+	it("redirects to /login when not signed in", async () => {
 		const url = `${app.base}/authorize?response_type=code&redirect_uri=${encodeURIComponent("https://example.com/cb")}&code_challenge=abc&code_challenge_method=S256&state=xyz&client_id=c1`;
-		const r = await fetch(url);
+		const r = await fetch(url, { redirect: "manual" });
+		expect(r.status).toBe(302);
+		const loc = r.headers.get("location") as string;
+		expect(loc).toContain("/login");
+		expect(loc).toContain(encodeURIComponent("/authorize"));
+	});
+
+	it("renders a consent screen when signed in", async () => {
+		const url = `${app.base}/authorize?response_type=code&redirect_uri=${encodeURIComponent("https://example.com/cb")}&code_challenge=abc&code_challenge_method=S256&state=xyz&client_id=c1`;
+		const r = await fetch(url, {
+			headers: { "x-test-user-id": TEST_USER },
+		});
 		expect(r.status).toBe(200);
 		const text = await r.text();
-		expect(text).toContain('name="secret"');
-		expect(text).toContain('value="xyz"');
+		expect(text).not.toContain('name="secret"');
+		expect(text).toContain("c1");
+		expect(text).toContain("Authorize");
 	});
 
 	it("400s when redirect_uri missing", async () => {
 		const r = await fetch(
 			`${app.base}/authorize?response_type=code&code_challenge=abc`,
+			{ headers: { "x-test-user-id": TEST_USER } },
 		);
 		expect(r.status).toBe(400);
 	});
 
-	it("rejects wrong secret", async () => {
+	it("POST redirects to /login when not signed in", async () => {
 		const r = await fetch(`${app.base}/authorize`, {
 			method: "POST",
 			redirect: "manual",
 			headers: { "content-type": "application/x-www-form-urlencoded" },
 			body: new URLSearchParams({
-				secret: "wrong",
 				redirect_uri: "https://example.com/cb",
 				code_challenge: "abc",
 				code_challenge_method: "S256",
@@ -115,17 +218,20 @@ describe("authorize form", () => {
 				client_id: "c1",
 			}).toString(),
 		});
-		expect(r.status).toBe(401);
+		expect(r.status).toBe(302);
+		expect(r.headers.get("location")).toContain("/login");
 	});
 
-	it("redirects with code on correct secret", async () => {
+	it("POST redirects with code when signed in", async () => {
 		const { challenge } = pkcePair();
 		const r = await fetch(`${app.base}/authorize`, {
 			method: "POST",
 			redirect: "manual",
-			headers: { "content-type": "application/x-www-form-urlencoded" },
+			headers: {
+				"content-type": "application/x-www-form-urlencoded",
+				"x-test-user-id": TEST_USER,
+			},
 			body: new URLSearchParams({
-				secret: SECRET,
 				redirect_uri: "https://example.com/cb",
 				code_challenge: challenge,
 				code_challenge_method: "S256",
@@ -141,47 +247,17 @@ describe("authorize form", () => {
 		expect(url.searchParams.get("state")).toBe("xyz");
 		expect(url.searchParams.get("code")).toBeTruthy();
 	});
-
-	it("rate limits after 5 attempts", async () => {
-		for (let i = 0; i < 5; i++) {
-			await fetch(`${app.base}/authorize`, {
-				method: "POST",
-				redirect: "manual",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({
-					secret: "wrong",
-					redirect_uri: "https://example.com/cb",
-					code_challenge: "abc",
-					code_challenge_method: "S256",
-					state: "",
-					client_id: "c1",
-				}).toString(),
-			});
-		}
-		const r = await fetch(`${app.base}/authorize`, {
-			method: "POST",
-			redirect: "manual",
-			headers: { "content-type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				secret: SECRET,
-				redirect_uri: "https://example.com/cb",
-				code_challenge: "abc",
-				code_challenge_method: "S256",
-				state: "",
-				client_id: "c1",
-			}).toString(),
-		});
-		expect(r.status).toBe(429);
-	});
 });
 
 async function getCode(challenge: string): Promise<string> {
 	const r = await fetch(`${app.base}/authorize`, {
 		method: "POST",
 		redirect: "manual",
-		headers: { "content-type": "application/x-www-form-urlencoded" },
+		headers: {
+			"content-type": "application/x-www-form-urlencoded",
+			"x-test-user-id": TEST_USER,
+		},
 		body: new URLSearchParams({
-			secret: SECRET,
 			redirect_uri: "https://example.com/cb",
 			code_challenge: challenge,
 			code_challenge_method: "S256",
@@ -194,7 +270,7 @@ async function getCode(challenge: string): Promise<string> {
 }
 
 describe("token + bearer", () => {
-	it("exchanges code for token with valid PKCE", async () => {
+	it("exchanges code for token with valid PKCE and resolves the user", async () => {
 		const { verifier, challenge } = pkcePair();
 		const code = await getCode(challenge);
 		const r = await fetch(`${app.base}/token`, {
@@ -216,6 +292,8 @@ describe("token + bearer", () => {
 			headers: { authorization: `Bearer ${body.access_token}` },
 		});
 		expect(ok.status).toBe(200);
+		const okBody = (await ok.json()) as Record<string, unknown>;
+		expect(okBody.userId).toBe(TEST_USER);
 	});
 
 	it("rejects token exchange with wrong verifier", async () => {
