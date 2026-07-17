@@ -54,6 +54,19 @@ export async function runHttpServer(
 	app.use(cookieParser(deriveCookieSecret(masterKey)));
 	app.set("trust proxy", true);
 
+	// The only general request visibility this server has — Fly's log
+	// pipeline has no per-request insight otherwise, and the auth routes
+	// only log on failure, not on every hit.
+	app.use((req, res, next) => {
+		const start = Date.now();
+		res.on("finish", () => {
+			console.error(
+				`${req.method} ${req.path} -> ${res.statusCode} (${Date.now() - start}ms)`,
+			);
+		});
+		next();
+	});
+
 	const transports = new Map<string, StreamableHTTPServerTransport>();
 
 	app.get("/health", (_req, res) => {
