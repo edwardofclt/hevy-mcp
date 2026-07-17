@@ -142,11 +142,13 @@ afterEach(async () => {
 });
 
 describe("GET /login", () => {
-	it("redirects to the (mocked) Apple auth URL", async () => {
+	it("renders a Sign in with Apple button linking to the (mocked) Apple auth URL", async () => {
 		buildAppleAuthUrl.mockReturnValue("https://appleid.apple.com/auth/x");
-		const r = await fetch(`${app.base}/login`, { redirect: "manual" });
-		expect(r.status).toBe(302);
-		expect(r.headers.get("location")).toBe("https://appleid.apple.com/auth/x");
+		const r = await fetch(`${app.base}/login`);
+		expect(r.status).toBe(200);
+		const text = await r.text();
+		expect(text).toContain("Sign in with Apple");
+		expect(text).toContain('href="https://appleid.apple.com/auth/x"');
 		expect(buildAppleAuthUrl).toHaveBeenCalled();
 	});
 });

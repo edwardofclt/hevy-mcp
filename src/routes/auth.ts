@@ -64,6 +64,21 @@ function decodeState(state: unknown): string {
 	}
 }
 
+function renderLoginPage(authUrl: string): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><title>hevy-mcp sign in</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:420px;margin:5rem auto;padding:0 1rem;color:#222;text-align:center}
+h1{font-size:1.25rem}
+.apple-btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;margin-top:1.5rem;padding:.75rem 1.5rem;font-size:1rem;border-radius:6px;background:#000;color:#fff;text-decoration:none}
+.apple-btn:hover{background:#222}
+.muted{color:#666;font-size:.9rem}
+</style></head><body>
+<h1>Sign in to hevy-mcp</h1>
+<p class="muted">Manage your Hevy API key and authorize MCP clients.</p>
+<a class="apple-btn" href="${htmlEscape(authUrl)}">Sign in with Apple</a>
+</body></html>`;
+}
+
 function renderAccountPage(params: {
 	configured: boolean;
 	updatedAt?: number;
@@ -111,7 +126,8 @@ export function createAuthRoutes(config: AuthRoutesConfig): Router {
 	router.get("/login", (req: Request, res: Response) => {
 		const next = sanitizeNext(req.query.next);
 		const state = encodeState(next);
-		res.redirect(302, buildAppleAuthUrl(state, appleEnv));
+		const authUrl = buildAppleAuthUrl(state, appleEnv);
+		res.status(200).type("html").send(renderLoginPage(authUrl));
 	});
 
 	// Apple calls this back via response_mode=form_post (a POST with an
